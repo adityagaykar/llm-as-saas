@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Designing an LLM SaaS (Serving Frontier Models) — System Design Interview Guide</title>
+<meta name="description" content="System design interview guide: how to serve frontier LLMs (Sonnet / Opus / GPT-class) as a SaaS. Requirements, back-of-envelope math, HLD, LLD, scaling." />
+<script>
+  (function () {
+    const saved = localStorage.getItem("theme");
+    const light = saved ? saved === "light" : window.matchMedia("(prefers-color-scheme: light)").matches;
+    document.documentElement.dataset.theme = light ? "light" : "dark";
+  })();
+</script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #30363d;
+    --text: #e6edf3; --muted: #9da7b3; --accent: #d97757; --accent2: #58a6ff;
+    --good: #3fb950; --warn: #d29922; --bad: #f85149; --code: #0b0f14; --heading: #f0f6fc;
+    --overlay: rgba(1,4,9,.88);
+  }
+  [data-theme="light"] {
+    --bg: #ffffff; --panel: #f6f8fa; --panel2: #eaeef2; --border: #d0d7de;
+    --text: #1f2328; --muted: #59636e; --accent: #c4552f; --accent2: #0969da;
+    --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; --code: #f6f8fa; --heading: #1f2328;
+    --overlay: rgba(255,255,255,.95);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.6; overflow-x: clip; }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+  code { background: var(--code); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
+  pre { background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-x: auto; }
+  pre code { border: 0; padding: 0; background: none; }
+
+  .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+  nav { position: sticky; top: 0; height: 100vh; overflow-y: auto; background: var(--panel);
+        border-right: 1px solid var(--border); padding: 20px 14px; }
+  nav .brand { font-weight: 700; font-size: 1.05rem; margin-bottom: 4px; }
+  nav .brand span { color: var(--accent); }
+  nav .sub { color: var(--muted); font-size: .8rem; margin-bottom: 16px; }
+  nav ol { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  nav li { counter-increment: s; }
+  nav li a { display: block; padding: 6px 10px; border-radius: 6px; color: var(--muted); font-size: .9rem; }
+  nav li a::before { content: counter(s) ". "; color: var(--accent); }
+  nav li a:hover, nav li a.active { background: var(--panel2); color: var(--text); text-decoration: none; }
+
+  main { padding: 32px 48px 80px; max-width: 1200px; min-width: 0; }
+  section { padding: 28px 0; border-bottom: 1px solid var(--border); }
+  h1 { font-size: 2.1rem; margin: 0 0 8px; line-height: 1.2; }
+  h1 .hl { color: var(--accent); }
+  h2 { font-size: 1.6rem; margin: 0 0 12px; }
+  h2 .num { color: var(--accent); margin-right: 6px; }
+  h3 { font-size: 1.15rem; margin: 24px 0 8px; color: var(--heading); }
+  h4 { margin: 16px 0 6px; color: var(--accent2); }
+  p.lead { color: var(--muted); font-size: 1.05rem; }
+
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+  .card h4 { margin-top: 0; }
+  .card ul { padding-left: 18px; margin: 6px 0; }
+
+  .callout { border-left: 4px solid var(--accent); background: rgba(217,119,87,.08); padding: 12px 16px;
+             border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .callout.say { border-color: var(--good); background: rgba(63,185,80,.08); }
+  .callout.say::before { content: "Say this in the interview"; display: block; font-weight: 700; color: var(--good);
+                         font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+  .callout.warn { border-color: var(--warn); background: rgba(210,153,34,.08); }
+
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--heading); }
+  tr:nth-child(even) td { background: rgba(255,255,255,.015); }
+  .tbl-wrap { overflow-x: auto; }
+
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .75rem; border: 1px solid var(--border);
+          background: var(--panel2); color: var(--muted); margin-right: 4px; }
+  .pill.a { color: var(--accent); border-color: var(--accent); }
+  .pill.b { color: var(--accent2); border-color: var(--accent2); }
+
+  .timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; }
+  .step { background: var(--panel); border: 1px solid var(--border); border-top: 3px solid var(--accent); border-radius: 8px; padding: 10px 12px; }
+  .step .t { font-size: .75rem; color: var(--accent); font-weight: 700; }
+  .step .n { font-weight: 600; }
+  .step .d { font-size: .82rem; color: var(--muted); }
+
+  .diagram { position: relative; margin: 12px 0; }
+  .mermaid { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 40px 12px 12px;
+             text-align: center; overflow: hidden; cursor: zoom-in; min-height: 120px; user-select: none; }
+  .mermaid svg { width: 100% !important; max-width: 100% !important; height: auto; max-height: 75vh; }
+  .mermaid:hover { border-color: var(--accent); }
+  .diagram-tools { position: absolute; top: 8px; right: 10px; display: flex; gap: 6px; align-items: center; z-index: 1; }
+  .diagram-tools .hint { font-size: .72rem; color: var(--muted); }
+  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+         padding: 4px 10px; font-size: .8rem; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .theme-btn { width: 100%; margin-bottom: 14px; }
+
+  /* fullscreen diagram modal */
+  #modal { position: fixed; inset: 0; background: var(--overlay); z-index: 1000; display: none; }
+  #modal.open { display: block; }
+  #modal .bar { position: absolute; top: 12px; right: 16px; display: flex; gap: 8px; z-index: 2; align-items: center; }
+  #modal .bar .hint { color: var(--muted); font-size: .8rem; margin-right: 8px; }
+  #modalViewport { position: absolute; inset: 56px 16px 16px; overflow: hidden; cursor: grab; touch-action: none;
+                   background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+  #modalViewport.dragging { cursor: grabbing; }
+  #modalStage { width: 100%; height: 100%; transform-origin: 0 0; }
+  #modalStage svg { width: 100% !important; height: 100% !important; max-width: none !important; }
+
+  details { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin: 8px 0; padding: 10px 14px; }
+  details summary { cursor: pointer; font-weight: 600; }
+  details[open] summary { color: var(--accent); margin-bottom: 6px; }
+
+  /* calculator */
+  .calc { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 18px; }
+  .calc > * { min-width: 0; }
+  @media (max-width: 1100px) { .calc { grid-template-columns: minmax(0, 1fr); } }
+  .form fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0 0 12px; padding: 8px 12px 12px; min-width: 0; }
+  .form legend { color: var(--accent); font-weight: 600; font-size: .85rem; padding: 0 6px; }
+  .form label { display: grid; grid-template-columns: 1fr 120px; align-items: center; gap: 8px; font-size: .82rem; color: var(--muted); margin: 5px 0; }
+  .form input, .form select { background: var(--code); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: .85rem; width: 100%; }
+  .form select.wide { width: 100%; }
+  .form .row-full { display: block; }
+  .form .row-full select { margin-top: 4px; }
+  .form .chk { grid-template-columns: 1fr 20px; }
+  .results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; align-content: start; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .kpi .k { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .kpi .v { font-size: 1.25rem; font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+  .kpi .s { font-size: .75rem; color: var(--muted); }
+  .kpi.hl { border-color: var(--accent); }
+  .group-title { grid-column: 1 / -1; font-weight: 700; color: var(--accent2); margin-top: 6px; font-size: .9rem; }
+  #warnings li { color: var(--warn); }
+  #warnings li.ok { color: var(--good); }
+  canvas { display: block; width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+
+  .banner { background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.35); border-radius: 8px; padding: 10px 14px; font-size: .88rem; color: var(--muted); margin: 14px 0; }
+  .banner b { color: var(--text); }
+
+  .menu-btn { display: none; }
+  @media (max-width: 1100px) {
+    main { padding: 28px 28px 70px; }
+  }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    nav { position: sticky; top: 0; z-index: 50; height: auto; max-height: 100vh; border-right: 0;
+          border-bottom: 1px solid var(--border); padding: 10px 16px;
+          display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+    nav .brand { margin: 0; }
+    nav .sub { display: none; }
+    .menu-btn { display: inline-block; padding: 6px 14px; font-size: .9rem; }
+    nav .theme-btn, nav ol { display: none; flex-basis: 100%; }
+    nav.open .theme-btn { display: block; margin: 10px 0 6px; padding: 8px; font-size: .9rem; }
+    nav.open ol { display: block; max-height: 65vh; overflow-y: auto; }
+    nav li a { padding: 9px 10px; font-size: .95rem; }
+    main { padding: 16px 16px 60px; }
+    section { padding: 20px 0; scroll-margin-top: 60px; }
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.3rem; }
+    h3 { font-size: 1.05rem; }
+    p.lead { font-size: .98rem; }
+    table { font-size: .82rem; }
+    th, td { padding: 6px 8px; }
+    pre { font-size: .78rem; padding: 10px; }
+    .card { padding: 14px; }
+    .form label { grid-template-columns: minmax(0, 1fr) 110px; }
+    .form input, .form select { font-size: 16px; } /* prevents iOS zoom-on-focus */
+    .results { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kpi .v { font-size: 1.05rem; }
+    .mermaid { padding: 32px 8px 8px; }
+    #modal .bar { left: 8px; right: 8px; top: 8px; justify-content: flex-end; flex-wrap: wrap; }
+    #modal .bar .hint { display: none; }
+    #modal .bar .btn { padding: 8px 14px; font-size: .95rem; }
+    #modalViewport { inset: 56px 6px 6px; }
+  }
+  footer { color: var(--muted); font-size: .8rem; padding: 30px 0; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav id="toc">
+    <div class="brand">LLM <span>SaaS</span> Design</div>
+    <button id="menuToggle" class="btn menu-btn" type="button" aria-expanded="false" aria-controls="tocList">Menu</button>
+    <div class="sub">System design interview playbook</div>
+    <button id="themeToggle" class="btn theme-btn" type="button">Switch to light mode</button>
+    <ol id="tocList">
+      <li><a href="#overview">Problem &amp; framing</a></li>
+      <li><a href="#playbook">45-min interview playbook</a></li>
+      <li><a href="#requirements">Requirements</a></li>
+      <li><a href="#tiers">Model tiers &amp; their needs</a></li>
+      <li><a href="#estimates">Back-of-envelope math</a></li>
+      <li><a href="#calculator">Interactive capacity calculator</a></li>
+      <li><a href="#api">API design</a></li>
+      <li><a href="#hld">High-level design</a></li>
+      <li><a href="#lld">Low-level design (deep dives)</a></li>
+      <li><a href="#scaling">Scaling each tier efficiently</a></li>
+      <li><a href="#reliability">Reliability &amp; failure modes</a></li>
+      <li><a href="#tradeoffs">Key trade-offs</a></li>
+      <li><a href="#qa">Follow-up questions</a></li>
+      <li><a href="#cheatsheet">Cheat sheet</a></li>
+    </ol>
+  </nav>
+
+  <main>
+  <!-- ============================================================ -->
+  <section id="overview">
+    <h1>Design an <span class="hl">LLM-as-a-Service</span> platform<br/>that serves frontier models at global scale</h1>
+    <p class="lead">This is the "Design the Claude / OpenAI API" interview question. You need to show that you understand the
+      parts that are specific to LLMs, such as memory-bound decoding, the KV cache, batching, model parallelism, and token-based quotas,
+      as well as the usual SaaS parts like authentication, rate limiting, metering, multi-region failover, and observability.</p>
+
+    <div class="banner">
+      <b>Disclaimer:</b> Anthropic, OpenAI and Google do not publish parameter counts or internal serving architecture.
+      Every model size on this page is an <b>illustrative assumption</b> picked to make the math concrete. "GPT Astra" is treated as a
+      hypothetical next-generation frontier model. The architecture uses <b>publicly documented industry techniques</b>
+      (continuous batching, PagedAttention, prefix caching, prefill/decode disaggregation, MoE expert parallelism, speculative decoding,
+      FP8/FP4 quantization) and publicly announced facts, such as Anthropic running on a mix of AWS Trainium, Google TPU and NVIDIA GPUs
+      and offering prompt caching and a discounted Batch API.
+    </div>
+
+    <h3>The one insight that drives the whole design</h3>
+    <div class="grid g2">
+      <div class="card">
+        <h4>Prefill is compute-bound</h4>
+        <p>All prompt tokens are processed in parallel as large matrix multiplications, so the GPU runs at high utilization.
+          Cost scales with <code>2 × active_params × prompt_tokens</code> FLOPs. This phase determines <b>time-to-first-token (TTFT)</b>.</p>
+      </div>
+      <div class="card">
+        <h4>Decode is memory-bandwidth-bound</h4>
+        <p>Each new token needs a full read of the (active) weights plus the sequence's KV cache from HBM, and it produces only
+          one token per sequence. The fix is to <b>batch many sequences</b> so they share one weight read. Batch size is limited by
+          <b>KV-cache memory</b> and by the <b>per-token latency SLO (TPOT)</b>.</p>
+      </div>
+    </div>
+    <div class="callout say">
+      "Serving LLMs efficiently comes down to keeping expensive accelerators saturated without breaking latency SLOs.
+      Decode is memory-bandwidth-bound, so I raise throughput by batching more sequences per weight read. That makes
+      KV-cache memory the scarce resource, so most of my design decisions (paged KV, prefix caching, quantization,
+      prefill/decode disaggregation, routing) aim to fit more useful sequences into HBM and keep the batch full."
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="playbook">
+    <h2><span class="num">2.</span>45-minute interview playbook</h2>
+    <div class="timeline">
+      <div class="step"><div class="t">0–5 min</div><div class="n">Clarify scope</div><div class="d">Inference only, not training. Public API plus first-party chat app? Which model tiers? Streaming? Context length? Global?</div></div>
+      <div class="step"><div class="t">5–10 min</div><div class="n">Requirements &amp; SLOs</div><div class="d">Functional list. Non-functional: TTFT, TPOT, availability, cost per token, isolation, privacy.</div></div>
+      <div class="step"><div class="t">10–17 min</div><div class="n">Estimates</div><div class="d">QPS to tokens/s. Weights memory to accelerators per replica. KV per token. Throughput per replica to fleet size to cost.</div></div>
+      <div class="step"><div class="t">17–20 min</div><div class="n">API</div><div class="d">POST /v1/messages, SSE streaming, usage block, headers for rate limits, Batch API.</div></div>
+      <div class="step"><div class="t">20–30 min</div><div class="n">HLD</div><div class="d">Edge, gateway, rate limiter, router/scheduler, prefill + decode pools, KV cache tiers, metering, control plane.</div></div>
+      <div class="step"><div class="t">30–40 min</div><div class="n">Deep dives (pick 2–3)</div><div class="d">Continuous batching + paged KV, parallelism layout, P/D disaggregation, cache-aware routing, rate limiting by tokens.</div></div>
+      <div class="step"><div class="t">40–45 min</div><div class="n">Scale, failures, trade-offs</div><div class="d">Per-tier scaling, overload (429 vs 529), GPU failure mid-stream, rollout of new model, cost levers.</div></div>
+    </div>
+    <h3>Clarifying questions to ask (and the default answers to assume)</h3>
+    <div class="tbl-wrap"><table>
+      <tr><th>Question</th><th>Reasonable assumption</th><th>Why it matters</th></tr>
+      <tr><td>Training or inference?</td><td>Inference only. Weights are given.</td><td>Keeps the scope manageable.</td></tr>
+      <tr><td>Which models?</td><td>Several tiers (small, Sonnet-class, Opus-class, frontier), each with its own pool.</td><td>Each tier has very different memory and parallelism needs.</td></tr>
+      <tr><td>Users / traffic?</td><td>~10M+ DAU across API + app, millions of developers, enterprise tenants.</td><td>Sets fleet size.</td></tr>
+      <tr><td>Context length?</td><td>200K standard, 1M optional. Typical prompt 2–8K tokens, output ~300–1000.</td><td>KV-cache size grows linearly with context length.</td></tr>
+      <tr><td>Streaming?</td><td>Yes, SSE token streaming.</td><td>Long-lived connections and partial-failure semantics.</td></tr>
+      <tr><td>Latency SLOs?</td><td>TTFT p50 &lt; 1s (short prompts), TPOT 20–60 ms depending on tier.</td><td>Caps batch size.</td></tr>
+      <tr><td>Data retention?</td><td>No training on API data by default. Limited log retention. Zero-retention option for enterprise.</td><td>Logging and caching design (cache is ephemeral, TTL-bound).</td></tr>
+      <tr><td>Multi-cloud / hardware?</td><td>Heterogeneous: GPUs + TPUs + Trainium across clouds and regions.</td><td>Needs an abstraction layer and per-hardware kernels.</td></tr>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="requirements">
+    <h2><span class="num">3.</span>Requirements</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h4>Functional</h4>
+        <ul>
+          <li>Text generation from a messages/chat payload (system prompt, multi-turn, images/PDFs).</li>
+          <li><b>Streaming</b> token output (SSE) and non-streaming responses.</li>
+          <li>Model selection by name/version (e.g. <code>claude-opus-x</code>, <code>-sonnet-x</code>) with pinned versions and aliases.</li>
+          <li>Tool use / function calling, structured (JSON) output, stop sequences, sampling params.</li>
+          <li><b>Prompt caching</b>: reuse a shared prefix at a discount and with lower latency.</li>
+          <li><b>Batch API</b>: asynchronous large jobs at lower price (results within 24h).</li>
+          <li>Token counting endpoint; usage reported per request.</li>
+          <li>Org / workspace / API-key management, usage dashboards, billing.</li>
+          <li>Per-org rate limits and spend limits by tier.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Non-functional</h4>
+        <ul>
+          <li><b>Latency</b>: TTFT p50 &lt; 0.5–1s, p99 &lt; 3–5s for typical prompts. TPOT (time per output token) 15–60 ms by tier.</li>
+          <li><b>Availability</b>: 99.9%+ for API. Graceful degradation under overload.</li>
+          <li><b>Throughput / efficiency</b>: maximize <i>goodput</i> (tokens/s that meet SLO) per accelerator. The main cost driver is accelerator-hours.</li>
+          <li><b>Scalability</b>: 10× traffic growth per year. New larger models every few months.</li>
+          <li><b>Fairness &amp; isolation</b>: one tenant cannot starve others. Priority classes.</li>
+          <li><b>Security &amp; privacy</b>: TLS everywhere, tenant isolation of caches, encryption at rest, configurable retention.</li>
+          <li><b>Safety</b>: abuse detection, usage-policy classifiers, auditability.</li>
+          <li><b>Correctness</b>: accurate token metering (billing). At-least-once usage events with idempotent aggregation.</li>
+          <li><b>Observability</b>: per-model, per-region, per-tenant SLO dashboards.</li>
+        </ul>
+      </div>
+    </div>
+    <h3>LLM-specific SLO vocabulary (use these terms)</h3>
+    <div class="tbl-wrap"><table>
+      <tr><th>Metric</th><th>Definition</th><th>Dominated by</th></tr>
+      <tr><td><b>TTFT</b></td><td>Time to first token</td><td>Queueing + prefill compute (prompt length × active params)</td></tr>
+      <tr><td><b>TPOT / ITL</b></td><td>Time per output token / inter-token latency</td><td>Decode step time: HBM bandwidth, batch size, interconnect</td></tr>
+      <tr><td><b>E2E latency</b></td><td>TTFT + output_tokens × TPOT</td><td>Output length</td></tr>
+      <tr><td><b>Throughput</b></td><td>Total tokens/s per replica or per accelerator</td><td>Batch size</td></tr>
+      <tr><td><b>Goodput</b></td><td>Requests/s that meet <i>both</i> TTFT and TPOT SLOs</td><td>The metric to optimize</td></tr>
+      <tr><td><b>MFU / MBU</b></td><td>Model FLOPs utilization / memory-bandwidth utilization</td><td>Prefill should have high MFU. Decode should have high MBU.</td></tr>
+    </table></div>
+    <h3>Out of scope (state it explicitly)</h3>
+    <p>Model training, RLHF pipelines, the chat UI front-end, and model evaluation. Mention that evals gate deployments, but don't design them.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="tiers">
+    <h2><span class="num">4.</span>Model tiers and what each one needs</h2>
+    <p>All numbers are <b>assumptions</b> for interview math. Frontier models are generally believed to be sparse
+      <b>Mixture-of-Experts (MoE)</b>: total parameters set the <i>memory</i> footprint, while active parameters per token set <i>compute and bandwidth per token</i>.</p>
+    <div class="tbl-wrap"><table id="tierTable"></table></div>
+    <div class="callout">
+      <b>How to read this:</b> "Min accelerators" = enough HBM for the weights with ~40% left for KV cache. In practice you deploy
+      <i>more</i> than the minimum, because extra HBM means a bigger batch, which raises throughput per dollar, and because aggregate memory bandwidth
+      lowers TPOT. The larger the model, the more the serving unit grows from <b>one GPU</b>, to <b>one node</b>, to <b>one rack-scale NVLink/ICI domain</b>,
+      to <b>multiple racks</b>.
+    </div>
+    <h3>Requirement differences by tier</h3>
+    <div class="tbl-wrap"><table>
+      <tr><th></th><th>Haiku-class</th><th>Sonnet-class</th><th>Opus 4.4-class</th><th>Opus 5.5-class</th><th>GPT Astra-class (hyp.)</th></tr>
+      <tr><td><b>Primary use</b></td><td>High-volume, classification, sub-agents</td><td>Workhorse: coding agents, chat, RAG</td><td>Hard reasoning, long agentic tasks</td><td>Frontier reasoning, very long horizons</td><td>Next-gen frontier, multimodal, 1M+ ctx</td></tr>
+      <tr><td><b>Traffic share</b></td><td>High req count</td><td><b>Highest token volume</b></td><td>Medium</td><td>Lower volume, highest $/token</td><td>Initially capacity-gated</td></tr>
+      <tr><td><b>TTFT target</b></td><td>&lt; 300 ms</td><td>&lt; 600 ms</td><td>&lt; 1 s</td><td>&lt; 1.5 s</td><td>&lt; 2 s</td></tr>
+      <tr><td><b>TPOT target</b></td><td>~10–20 ms (50–100 tok/s)</td><td>~20–30 ms</td><td>~30–40 ms</td><td>~35–50 ms</td><td>~40–60 ms</td></tr>
+      <tr><td><b>Serving unit</b></td><td>1 GPU (or 2 with TP)</td><td>1 node (4–8 GPUs)</td><td>2 nodes / 16 GPUs</td><td>Rack-scale domain (32–72)</td><td>Rack(s) of 72+ with PP across racks</td></tr>
+      <tr><td><b>Parallelism</b></td><td>DP only</td><td>TP within node + EP</td><td>Wide EP + TP for attention, DP-attention</td><td>Wide EP over NVLink/ICI domain, P/D disagg</td><td>EP in rack + PP across racks + context parallelism</td></tr>
+      <tr><td><b>Bottleneck</b></td><td>CPU/scheduler overhead, prefill</td><td>KV capacity (long agent contexts)</td><td>HBM bandwidth, all-to-all comm</td><td>Interconnect, KV capacity at long ctx</td><td>Power, cross-rack comm, cold start</td></tr>
+      <tr><td><b>Key levers</b></td><td>Huge batches, CUDA graphs, cheap HW</td><td>Prefix caching, cache-aware routing</td><td>FP8, P/D disaggregation, speculative decode</td><td>FP8/FP4, MTP speculative, KV offload</td><td>FP4, KV compression, multi-rack PP, admission gating</td></tr>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="estimates">
+    <h2><span class="num">5.</span>Back-of-envelope calculations</h2>
+    <h3>Core formulas (memorize these)</h3>
+<pre><code>Weights memory        = total_params × bytes_per_param          (BF16=2, FP8=1, FP4=0.5)
+KV cache per token    = 2 (K and V) × layers × kv_heads × head_dim × bytes
+KV per sequence       = KV_per_token × (prompt_tokens + output_tokens)
+Max concurrent seqs   = (HBM_total − weights − activations) / KV_per_sequence
+
+FLOPs per token       ≈ 2 × active_params                       (forward pass)
+Prefill time          ≈ 2 × active_params × prompt_tokens / (N × peak_FLOPs × MFU)
+Decode step time      ≈ max( bytes_read / (N × HBM_BW),   2 × active_params × batch / (N × FLOPs) ) + comm
+      bytes_read      = weights_touched + batch × KV_per_token × avg_context
+Per-user tok/s        = 1 / step_time                           (TPOT = step_time)
+Replica tok/s         = batch / step_time
+Replicas needed       = peak_output_tok_s / replica_tok_s
+Concurrency (Little)  = peak_QPS × (TTFT + output_tokens × TPOT)
+$ per 1M out tokens   = replica_$_per_hour / (replica_tok_s × 3600) × 1e6</code></pre>
+
+    <h3>Worked example: Opus 5.5-class (assumed 3T total / 200B active MoE, FP8)</h3>
+    <div class="grid g2">
+      <div class="card">
+        <h4>1. Traffic</h4>
+        <ul>
+          <li>10M DAU × 10 requests/day = <b>100M req/day</b></li>
+          <li>÷ 86,400 ≈ <b>1,160 QPS avg</b>. Peak 3× ≈ <b>3,500 QPS</b></li>
+          <li>Prompt 3,000 tokens (50% cache hit), output 400 tokens</li>
+          <li>Peak output ≈ 3,500 × 400 = <b>1.4M tok/s</b></li>
+          <li>Peak uncached input ≈ 3,500 × 1,500 = <b>5.2M tok/s</b></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>2. Memory per replica</h4>
+        <ul>
+          <li>Weights: 3T × 1 B = <b>3 TB</b>. That needs at least 16 × 192 GB GPUs just for weights</li>
+          <li>Choose a 36-GPU (288 GB) rack-scale domain: ~9.3 TB usable, so ~6.3 TB for KV</li>
+          <li>KV/token = 2 × 120 layers × 8 kv_heads × 128 × 1 B ≈ <b>240 KB</b></li>
+          <li>3.4K-token sequence ≈ 0.8 GB. A <b>200K-token</b> sequence ≈ <b>49 GB</b>, which is why long context is expensive</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>3. Decode speed</h4>
+        <ul>
+          <li>Aggregate BW = 36 × 8 TB/s × 70% ≈ 200 TB/s</li>
+          <li>Batch 256: weights touched ≈ 3 TB + KV read ≈ 0.2 TB, about 3.2 TB per step</li>
+          <li>Step ≈ 16 ms + ~3.5 ms comm ≈ <b>~20 ms TPOT</b> (~50 tok/s per user)</li>
+          <li>Replica throughput ≈ 256 / 0.02 ≈ <b>~13K tok/s</b></li>
+          <li>Compute check: 2 × 200B × 256 = 0.1 PFLOP per step, well under capacity. <b>Memory-bound</b>, confirmed</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>4. Fleet &amp; cost</h4>
+        <ul>
+          <li>Decode: 1.4M / 13K ≈ <b>~110 replicas × 36 ≈ 4,000 GPUs</b></li>
+          <li>Prefill: 5.2M tok/s × 2 × 200B ≈ 2.1 EFLOP/s ÷ (5 PF × 40%) ≈ <b>~1,050 GPUs</b></li>
+          <li>Total ~5K GPUs, at ~1.8 kW all-in × 1.3 PUE ≈ <b>~12 MW</b> for this one tier</li>
+          <li>Cost per 1M output tokens ≈ (36 × $7/h) / (13K × 3600 / 1e6) ≈ <b>~$5</b> (at full utilization)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout say">
+      "Weights alone are about 3 TB, so the serving unit has to be a rack-scale NVLink domain and not a single 8-GPU node. Decode is memory-bound:
+      each step reads about 3 TB across about 200 TB/s of aggregate bandwidth, which is roughly 16 ms. With a batch of 256 I get about 13K tokens/s per
+      replica at about 50 tokens/s per user. Peak output demand of 1.4M tokens/s therefore needs about 110 replicas. The biggest levers on that number are
+      batch size, which is bounded by KV memory and TPOT, quantization, and prefix-cache hit rate."
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="calculator">
+    <h2><span class="num">6.</span>Interactive capacity calculator</h2>
+    <p>Pick a tier preset, then adjust any input. The model is deliberately simple (roofline-style), and that is the level of detail
+      expected in an interview. Hardware specs are approximate public dense-math figures. Prices are illustrative.
+      To reproduce the worked example in §5, uncheck <i>auto-pick</i> and set the batch to 256. Auto mode pushes the batch up to the TPOT SLO or the KV limit,
+      which shows why batch size is the biggest cost lever.</p>
+    <div class="calc">
+      <div class="form">
+        <fieldset>
+          <legend>Preset</legend>
+          <label class="row-full">Model tier
+            <select id="preset" class="wide"></select>
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>Model (assumed)</legend>
+          <label>Total params (B)<input id="total" type="number" step="1" /></label>
+          <label>Active params / token (B)<input id="active" type="number" step="1" /></label>
+          <label>Layers<input id="layers" type="number" /></label>
+          <label>KV heads (GQA)<input id="kvh" type="number" /></label>
+          <label>Head dim<input id="hd" type="number" /></label>
+          <label>Weight precision<select id="wp"><option value="2">BF16 (2 B)</option><option value="1">FP8 (1 B)</option><option value="0.5">FP4 (0.5 B)</option></select></label>
+          <label>KV-cache precision<select id="kvp"><option value="2">BF16 (2 B)</option><option value="1">FP8 (1 B)</option></select></label>
+        </fieldset>
+        <fieldset>
+          <legend>Hardware / replica</legend>
+          <label class="row-full">Accelerator<select id="hw" class="wide"></select></label>
+          <label>Accelerators per replica<input id="n" type="number" /></label>
+          <label>HBM usable fraction<input id="memUtil" type="number" step="0.05" value="0.9" /></label>
+          <label>HBM BW efficiency<input id="bwEff" type="number" step="0.05" value="0.7" /></label>
+          <label>Prefill MFU<input id="mfuP" type="number" step="0.05" value="0.4" /></label>
+          <label>Comm overhead / step (ms)<input id="comm" type="number" step="0.5" /></label>
+          <label>$ per accelerator-hour<input id="price" type="number" step="0.5" /></label>
+          <label>kW per accel (all-in)<input id="kw" type="number" step="0.1" /></label>
+        </fieldset>
+        <fieldset>
+          <legend>Traffic &amp; SLO</legend>
+          <label>DAU (millions)<input id="dau" type="number" step="1" value="10" /></label>
+          <label>Requests / user / day<input id="rpu" type="number" value="10" /></label>
+          <label>Avg prompt tokens<input id="inTok" type="number" value="3000" /></label>
+          <label>Avg output tokens<input id="outTok" type="number" value="400" /></label>
+          <label>Peak / avg factor<input id="peak" type="number" step="0.5" value="3" /></label>
+          <label>Prefix-cache hit rate<input id="cache" type="number" step="0.05" value="0.5" /></label>
+          <label>TPOT SLO (ms)<input id="slo" type="number" /></label>
+          <label>Speculative decode speedup ×<input id="spec" type="number" step="0.1" value="1.0" /></label>
+          <label class="chk">Auto-pick largest batch meeting TPOT SLO<input id="auto" type="checkbox" checked /></label>
+          <label>Manual batch size<input id="batch" type="number" value="256" /></label>
+        </fieldset>
+      </div>
+      <div>
+        <div class="results" id="results"></div>
+        <h4>Sanity checks</h4>
+        <ul id="warnings"></ul>
+        <h4>Throughput vs latency as batch grows (the core decode trade-off)</h4>
+        <canvas id="chart" width="900" height="320"></canvas>
+        <p style="font-size:.82rem;color:var(--muted)">Orange: replica throughput (tok/s). Blue: TPOT (ms). Dashed line: TPOT SLO. Throughput rises almost linearly while
+          weight reads dominate the step time. Once KV reads and compute grow, TPOT climbs, and the SLO line marks the largest batch you can run.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="api">
+    <h2><span class="num">7.</span>API design</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h4>Endpoints</h4>
+<pre><code>POST /v1/messages                 # sync or stream=true (SSE)
+POST /v1/messages/count_tokens
+POST /v1/messages/batches         # async batch (JSONL in)
+GET  /v1/messages/batches/{id}
+GET  /v1/models
+# control plane
+POST /v1/orgs/{id}/api_keys
+GET  /v1/orgs/{id}/usage?from=&amp;to=&amp;group_by=model</code></pre>
+      </div>
+      <div class="card">
+        <h4>Request</h4>
+<pre><code>{
+  "model": "opus-5.5",
+  "max_tokens": 1024,
+  "system": [{ "type": "text", "text": "...",
+              "cache_control": {"type": "ephemeral"} }],
+  "messages": [{ "role": "user", "content": "..." }],
+  "tools": [...],
+  "temperature": 0.7,
+  "stream": true
+}</code></pre>
+      </div>
+      <div class="card">
+        <h4>Streaming response (SSE)</h4>
+<pre><code>event: message_start
+data: {"message":{"id":"msg_..","usage":{"input_tokens":2950,
+       "cache_read_input_tokens":2048}}}
+event: content_block_delta
+data: {"delta":{"type":"text_delta","text":"Hel"}}
+...
+event: message_delta
+data: {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":412}}
+event: message_stop</code></pre>
+      </div>
+      <div class="card">
+        <h4>Design notes</h4>
+        <ul>
+          <li><b>SSE over HTTP/1.1 or HTTP/2</b>: one-directional, works through proxies, easy to resume or close. WebSockets are only needed for bidirectional real-time use such as voice.</li>
+          <li><b>Rate-limit headers</b>: <code>x-ratelimit-remaining-tokens</code>, <code>retry-after</code>.</li>
+          <li><b>Error semantics</b>: <code>429</code> means <i>your</i> quota is exhausted. <code>529/503 overloaded</code> means <i>our</i> capacity is exhausted. Clients retry with exponential backoff and jitter.</li>
+          <li><b>Idempotency</b>: generation is not idempotent. Support a request-id for dedupe of billing and for client retries.</li>
+          <li><b>Usage block</b> always returned. It is the source of truth for client-side cost tracking.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="hld">
+    <h2><span class="num">8.</span>High-level design</h2>
+    <div class="mermaid">
+flowchart LR
+  C["Clients<br/>SDKs, apps, cloud marketplaces"] --> E["Global Edge<br/>Anycast DNS, TLS, WAF, DDoS"]
+  E --> G["API Gateway<br/>authN, validation, tokenization"]
+  G <--> RL[("Rate limiter<br/>RPM / ITPM / OTPM buckets")]
+  G --> SF["Safety pre-checks"]
+  SF --> GR["Global Router<br/>model to region and cluster<br/>admission control"]
+  GR --> Q["Per-model priority queues<br/>interactive, batch, internal"]
+  BA["Batch API<br/>object store + job queue"] --> Q
+  Q --> RS["Cluster Scheduler<br/>KV and prefix-aware LB"]
+  subgraph CL["Inference cluster (one per model tier per region)"]
+    RS --> P["Prefill pool<br/>compute-optimized"]
+    P -- "KV transfer<br/>RDMA / NVLink" --> D["Decode pool<br/>bandwidth-optimized"]
+    D <--> KV[("KV / prefix cache<br/>HBM, DRAM, NVMe")]
+  end
+  D -- "token stream" --> G
+  G -- "SSE" --> C
+  D --> U["Usage events<br/>Kafka"]
+  U --> MB["Metering, billing, analytics"]
+  CP["Control plane<br/>model registry, weight distribution,<br/>autoscaler, capacity planner"] -.-> CL
+  OB["Observability<br/>metrics, traces, logs"] -.-> CL
+    </div>
+
+    <h3>Component responsibilities</h3>
+    <div class="tbl-wrap"><table>
+      <tr><th>Component</th><th>Responsibility</th><th>Scaling / state</th></tr>
+      <tr><td>Edge</td><td>TLS termination near user, DDoS, geo-routing to nearest healthy region.</td><td>Stateless, CDN/anycast</td></tr>
+      <tr><td>API Gateway</td><td>API key auth (hashed keys, cached), schema validation, tokenization (to count input tokens), holds SSE connection.</td><td>Stateless, horizontally scaled. Long-lived connections, so size for concurrent streams, not QPS.</td></tr>
+      <tr><td>Rate limiter</td><td>Token buckets per org per model: requests/min, input tokens/min, output tokens/min. Spend caps.</td><td>Redis cluster + local approximate counters. Sharded by org.</td></tr>
+      <tr><td>Global router</td><td>Selects region/cluster by capacity, latency, data residency, hardware type. Admission control and load shedding.</td><td>Reads real-time capacity signals from clusters.</td></tr>
+      <tr><td>Priority queues</td><td>Separate interactive vs batch vs internal traffic. Weighted fair queuing across tenants.</td><td>In-memory per scheduler, short (seconds). Long waits mean shed.</td></tr>
+      <tr><td>Cluster scheduler</td><td>Chooses replica: prefix-cache affinity, KV-utilization, queue depth.</td><td>Soft state rebuilt from replica heartbeats.</td></tr>
+      <tr><td>Prefill / decode pools</td><td>Run the model engine (continuous batching, paged KV, kernels per hardware).</td><td>Stateful (KV in HBM). Replicas are units of 1–72+ accelerators.</td></tr>
+      <tr><td>KV / prefix cache</td><td>Reuse computed KV for shared prefixes (system prompts, documents, conversation history).</td><td>Tiered: HBM, host DRAM, NVMe. TTL-based. Tenant-scoped.</td></tr>
+      <tr><td>Metering</td><td>Emit usage (input, cache read, cache write, output tokens) per request. Aggregate for billing.</td><td>Kafka, stream aggregation, OLAP + billing DB. Idempotent on request-id.</td></tr>
+      <tr><td>Control plane</td><td>Model registry and versions, weight distribution, autoscaling, canary rollouts, capacity planning across clouds.</td><td>Strongly consistent config store.</td></tr>
+    </table></div>
+
+    <h3>Request lifecycle</h3>
+    <div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant G as Gateway
+  participant RL as Rate limiter
+  participant R as Router/Scheduler
+  participant P as Prefill worker
+  participant D as Decode worker
+  participant M as Metering
+  C->>G: POST /v1/messages (stream=true)
+  G->>G: auth key, validate, tokenize
+  G->>RL: reserve input + max_tokens
+  RL-->>G: ok (or 429)
+  G->>R: enqueue(model, priority, prefix hash)
+  R->>P: assign replica with best prefix match
+  P->>P: prefix-cache lookup, prefill uncached tokens
+  P->>D: transfer KV blocks + first token
+  D-->>G: token stream (each decode step)
+  G-->>C: SSE deltas
+  D->>D: stop on EOS, stop seq, or max_tokens
+  D->>M: usage event (request id)
+  G->>RL: reconcile reserved vs actual output tokens
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="lld">
+    <h2><span class="num">9.</span>Low-level design: deep dives</h2>
+
+    <h3>9.1 Inference engine: continuous batching</h3>
+    <div class="grid g2">
+      <div class="card">
+        <h4>Problem with static batching</h4>
+        <p>Requests finish at different lengths. With static batching, slots that finish early sit idle until the longest sequence completes, and new requests wait.</p>
+        <h4>Iteration-level (continuous) batching</h4>
+        <p>The scheduler runs <b>every decode step</b>. It removes finished sequences, admits waiting ones if KV blocks are free, and runs one forward pass for the whole batch.
+          This gives 2–10× throughput over static batching.</p>
+      </div>
+      <div class="card">
+        <h4>Engine loop (pseudo-code)</h4>
+<pre><code>while True:
+  finished = [s for s in running if s.done()]
+  free_kv_blocks(finished); stream_final(finished)
+  # admit new work within KV + token budget
+  while waiting and kv.can_alloc(waiting[0]) \
+        and step_tokens &lt; TOKEN_BUDGET:
+      seq = waiting.pop_by_priority()
+      seq.prefix_hit = prefix_cache.match(seq)
+      running.add(seq)          # prefill in chunks
+  batch = build(running, chunked_prefill=True)
+  logits = model.forward(batch)  # CUDA graph / XLA
+  tokens = sample(logits, params, grammar_masks)
+  emit(tokens); maybe_preempt_if_kv_full()</code></pre>
+      </div>
+    </div>
+    <p><b>Chunked prefill</b> splits long prompts into chunks (e.g. 512–2K tokens) that are mixed into decode batches, so a 100K-token prompt does not stall every other user's TPOT.
+      <b>Preemption</b>: when KV runs out, evict the lowest-priority sequence by swapping its KV to host DRAM or recomputing it later.</p>
+
+    <h3>9.2 KV-cache management: PagedAttention and prefix caching</h3>
+    <div class="grid g2">
+      <div class="card">
+        <h4>Paged KV</h4>
+        <ul>
+          <li>KV stored in fixed-size <b>blocks</b> (e.g. 16–64 tokens). Each sequence has a <b>block table</b> (logical to physical), like OS virtual memory.</li>
+          <li>Near-zero fragmentation, so more concurrent sequences fit, so batches are larger.</li>
+          <li>Copy-on-write sharing for parallel sampling (n &gt; 1) and beam search.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Prefix (prompt) caching</h4>
+        <ul>
+          <li>Hash each full block, chained with the hash of the previous block, to get a <b>radix tree</b> of cached prefixes.</li>
+          <li>A new request walks the tree and reuses matched blocks, so it only prefills the suffix.</li>
+          <li>Agentic and coding workloads resend long, mostly identical histories, so hit rates can be very high. This cuts TTFT and prefill cost.</li>
+          <li>Productized as explicit cache breakpoints with a TTL (e.g. 5 min default, longer option). Cache writes are billed at a premium and cache reads at a steep discount.</li>
+          <li><b>Security</b>: cache keys are scoped by org, so there is no cross-tenant reuse or timing side-channel.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <tr><th>KV tier</th><th>Capacity per node (approx)</th><th>Bandwidth</th><th>Use</th></tr>
+      <tr><td>HBM</td><td>0.6–2.3 TB (8 GPUs)</td><td>3–8 TB/s per GPU</td><td>Active sequences</td></tr>
+      <tr><td>Host DRAM</td><td>2–4 TB</td><td>~64 GB/s per GPU (PCIe5) or more with C2C links</td><td>Warm prefixes, preempted sequences</td></tr>
+      <tr><td>Local NVMe</td><td>30–60 TB</td><td>~10–50 GB/s</td><td>Long-TTL prefixes</td></tr>
+      <tr><td>Distributed KV store</td><td>PBs</td><td>RDMA network</td><td>Cross-replica prefix sharing (Mooncake-style)</td></tr>
+    </table></div>
+
+    <h3>9.3 Model parallelism: mapping the model onto hardware</h3>
+    <div class="tbl-wrap"><table>
+      <tr><th>Strategy</th><th>What is split</th><th>Communication</th><th>Where it fits</th><th>Trade-off</th></tr>
+      <tr><td><b>Data parallel (DP)</b></td><td>Nothing (full replicas)</td><td>None between replicas</td><td>Scale-out for small models</td><td>Each replica must fit the model</td></tr>
+      <tr><td><b>Tensor parallel (TP)</b></td><td>Each matmul across GPUs</td><td>All-reduce every layer (latency-sensitive)</td><td>Within NVLink / ICI domain only</td><td>Lowers TPOT, but comm cost grows with TP degree</td></tr>
+      <tr><td><b>Pipeline parallel (PP)</b></td><td>Layers into stages</td><td>Point-to-point activations between stages</td><td>Across nodes/racks (slower links OK)</td><td>Adds per-token latency (stage hops). Needs micro-batches to fill bubbles</td></tr>
+      <tr><td><b>Expert parallel (EP)</b></td><td>MoE experts across GPUs</td><td>All-to-all dispatch/combine per MoE layer</td><td>Large MoE. Best inside a big NVLink domain (NVL72 / TPU pod / Trn UltraServer)</td><td>Load imbalance (hot experts). Needs redundant experts and load balancing</td></tr>
+      <tr><td><b>DP-attention</b></td><td>Attention replicated per DP rank, experts shared via EP</td><td>All-to-all</td><td>MoE with small KV heads (avoids KV duplication from TP)</td><td>More complex scheduling</td></tr>
+      <tr><td><b>Context / sequence parallel</b></td><td>Long sequence across GPUs</td><td>Ring attention exchanges KV blocks</td><td>Prefill of 200K–1M+ token prompts</td><td>Only worth it for very long contexts</td></tr>
+    </table></div>
+    <div class="callout say">
+      "For a multi-trillion-parameter MoE I'd put the experts across a rack-scale high-bandwidth domain with expert parallelism, because the
+      all-to-all per MoE layer needs NVLink/ICI-class bandwidth. I'd run attention with DP-attention or small TP, and only fall back to pipeline
+      parallelism across racks when one domain can't hold the weights plus a useful amount of KV cache."
+    </div>
+
+    <h3>9.4 Prefill / decode disaggregation</h3>
+    <div class="mermaid">
+flowchart LR
+  R["Scheduler"] --> P1["Prefill replica A<br/>high MFU, big chunks"]
+  R --> P2["Prefill replica B"]
+  P1 -- "KV blocks via RDMA" --> D1["Decode replica 1<br/>large batch, high MBU"]
+  P2 -- "KV blocks via RDMA" --> D2["Decode replica 2"]
+  P1 -.-> D2
+  D1 --> O["Token stream"]
+  D2 --> O
+    </div>
+    <div class="grid g2">
+      <div class="card"><h4>Why</h4><ul>
+        <li>Prefill and decode interfere: a big prefill stalls decode steps and causes TPOT spikes.</li>
+        <li>They have different optimal configs (parallelism, batch, even hardware generation).</li>
+        <li>You can scale them independently: the P:D ratio follows the input:output token mix (RAG/agents are prefill-heavy).</li>
+      </div>
+      <div class="card"><h4>Costs / when not to</h4><ul>
+        <li>KV transfer: 3K tokens × 240 KB ≈ 0.7 GB. Over 400 Gb/s RDMA that is about 15 ms, which is acceptable. Use layer-wise pipelined transfer.</li>
+        <li>Needs a fast fabric and more operational complexity.</li>
+        <li>For small models or low load, colocated + chunked prefill is simpler and good enough.</li>
+      </ul></div>
+    </div>
+
+    <h3>9.5 Decode speedups</h3>
+    <div class="grid g3">
+      <div class="card"><h4>Speculative decoding</h4><p>A cheap draft (small model, n-gram, or built-in <b>multi-token-prediction</b> heads) proposes k tokens. The big model verifies them in one pass. Output distribution is unchanged. Gives 1.5–3× lower TPOT when the acceptance rate is high (code, structured text).</p></div>
+      <div class="card"><h4>Quantization</h4><p>FP8 weights and activations are now standard. FP4 (MX/NV formats) on newer hardware. Halving bytes per parameter roughly halves memory-bound decode time and doubles KV room. Must pass eval gates for quality regressions.</p></div>
+      <div class="card"><h4>KV compression</h4><p>GQA/MQA or latent attention (MLA) cut KV per token by 4–30×. FP8 KV gives another 2×. Sliding-window or hybrid attention layers help long context.</p></div>
+      <div class="card"><h4>Kernels &amp; runtime</h4><p>FlashAttention-style fused kernels, CUDA graphs / XLA compilation to remove launch overhead, overlapped comm and compute, and fused MoE grouped GEMM.</p></div>
+      <div class="card"><h4>Structured output</h4><p>Grammar-constrained decoding (JSON schema to token masks) computed on CPU and overlapped with the GPU step.</p></div>
+      <div class="card"><h4>Expert load balancing</h4><p>Replicate hot experts, and periodically rebalance placement from observed routing statistics.</p></div>
+    </div>
+
+    <h3>9.6 Routing &amp; scheduling</h3>
+    <div class="grid g2">
+      <div class="card">
+        <h4>Cache-aware load balancing</h4>
+        <ul>
+          <li>Key = hash(org_id, first N prefix blocks). Use <b>consistent hashing with bounded load</b>, so the same conversation lands on the replica holding its KV.</li>
+          <li>Score = α·prefix_match_len − β·queue_depth − γ·KV_utilization. Pick the best of k candidates (power of k choices).</li>
+          <li>Spill to another replica if the preferred one is hot. Accept a cache miss rather than queueing.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Priority &amp; fairness</h4>
+        <ul>
+          <li>Classes: interactive paid &gt; interactive free &gt; batch API &gt; internal/offline.</li>
+          <li>Weighted fair queuing by org inside each class, so one tenant cannot monopolize a pool.</li>
+          <li>Batch jobs fill diurnal troughs, which raises average utilization (hence the batch discount).</li>
+          <li>Deadline-aware: shed from the queue if the expected wait already blows the TTFT SLO.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>9.7 Rate limiting by tokens</h3>
+<pre><code>On request:
+  est_in  = tokenize(prompt)             # exact, at gateway
+  reserve = est_in (ITPM bucket) + max_tokens (OTPM bucket) + 1 (RPM bucket)
+  if any bucket lacks capacity -> 429 with retry-after
+On completion:
+  refund OTPM bucket by (max_tokens - actual_output)
+Implementation:
+  Redis Lua script for atomic multi-bucket check (sharded by org_id)
+  + per-gateway local leaky-bucket cache to absorb bursts; reconcile every ~100ms
+  cache-read tokens count less (or not at all) toward ITPM -> incentivizes caching</code></pre>
+
+    <h3>9.8 Autoscaling &amp; weight distribution</h3>
+    <ul>
+      <li><b>Cold start is slow</b>: 3 TB of weights at ~25 GB/s per node from object storage takes minutes. Mitigations: pre-stage weights on local NVMe, use peer-to-peer (BitTorrent-style) broadcast inside the cluster, GPU-direct storage, and keep <b>warm standby replicas</b>.</li>
+      <li><b>Scaling signals</b>: queue depth, KV-cache utilization, TTFT p95, tokens/s. Do not use CPU%.</li>
+      <li><b>Capacity is reserved, not elastic</b>: frontier accelerators are bought or leased long-term. Autoscaling mostly <i>reassigns</i> fixed capacity between model tiers, batch vs interactive, and research vs prod. Forecast diurnal and weekly patterns.</li>
+      <li><b>Heterogeneous fleet</b>: one model version is compiled per hardware target (GPU / TPU / Trainium). The router treats them as interchangeable pools, with per-pool throughput weights.</li>
+    </ul>
+
+    <h3>9.9 Data model</h3>
+<pre><code>Org(id, name, tier, data_residency, retention_policy)
+ApiKey(id, org_id, workspace_id, key_hash, scopes, created_at, revoked_at)
+RateLimit(org_id, model_family, rpm, itpm, otpm, spend_cap_usd)
+ModelDeployment(model_id, version, hw_type, region, replicas, parallelism_cfg, status)
+UsageEvent(request_id PK, org_id, key_id, model, region, input_tokens,
+           cache_write_tokens, cache_read_tokens, output_tokens, ts)   -> Kafka -> OLAP
+BatchJob(id, org_id, input_uri, output_uri, status, counts, expires_at)
+PrefixCacheEntry (in-memory only): hash(org_id, block_chain) -> {replica, tier, ttl}</code></pre>
+
+    <h3>9.10 Safety, security, observability</h3>
+    <div class="grid g3">
+      <div class="card"><h4>Safety</h4><ul><li>Lightweight input classifiers inline (small model, low latency).</li><li>Streaming output classifiers that can halt generation.</li><li>Async abuse detection on usage patterns.</li></ul></div>
+      <div class="card"><h4>Security</h4><ul><li>Keys hashed (never stored raw). mTLS internally.</li><li>Tenant-scoped caches. HBM/KV is zeroed or reused only within its tenant scope.</li><li>Weights encrypted at rest. Restricted access to serving nodes.</li></ul></div>
+      <div class="card"><h4>Observability</h4><ul><li>TTFT, TPOT, queue time, goodput per model, region and tier.</li><li>KV utilization, batch size, MBU/MFU, expert load skew.</li><li>429/529 rates, stream disconnects, accelerator health (ECC, XID errors).</li></ul></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="scaling">
+    <h2><span class="num">10.</span>Scaling each tier efficiently</h2>
+    <p>As models grow, the serving unit grows and the dominant bottleneck moves: <b>compute/overhead</b>, then <b>KV capacity</b>, then <b>HBM bandwidth</b>, then <b>interconnect</b>, then <b>power and cold start</b>.</p>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="pill">Small</span> Haiku-class</h4>
+        <ul>
+          <li>Fits on one accelerator, so scale with <b>pure data parallelism</b> and simple least-loaded routing.</li>
+          <li>Batches are cheap, so run very large batches. The bottleneck becomes CPU-side scheduling, tokenization and sampling. Use CUDA graphs and an async scheduler.</li>
+          <li>Can run on older or cheaper hardware (previous-gen GPUs, inference chips).</li>
+          <li>Also used internally as speculative-draft model, safety classifier and router.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="pill b">Mid</span> Sonnet-class</h4>
+        <ul>
+          <li>Single 4–8 accelerator node: TP/EP inside NVLink. Many replicas, and <b>the largest fleet by tokens</b>.</li>
+          <li>Coding agents drive long, repeated contexts, so <b>prefix caching + cache-aware routing</b> is the main efficiency lever (often &gt;50% of input tokens are cache reads).</li>
+          <li>KV capacity limits batch size, so use FP8 KV and offload to host DRAM.</li>
+          <li>Disaggregate P/D once the traffic mix is prefill-heavy.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="pill a">Large</span> Opus 4.4-class</h4>
+        <ul>
+          <li>Weights exceed one node, so 2+ nodes (16+ GPUs) or rack-scale domains with <b>wide EP</b>.</li>
+          <li><b>P/D disaggregation</b> pays off: prefill on compute-dense nodes, decode with large batches on high-HBM nodes.</li>
+          <li>Speculative decoding to bring TPOT back to acceptable interactive speed.</li>
+          <li>Fewer, larger replicas, so replica failure has a bigger blast radius. Keep N+2 spare per region.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="pill a">Frontier</span> Opus 5.5-class</h4>
+        <ul>
+          <li>Rack-scale serving unit (e.g. 72-GPU NVLink domain, TPU pod slice, Trainium UltraServer). The all-to-all for EP stays inside the domain.</li>
+          <li>FP8 weights (FP4 where quality allows) and MTP-based speculative decoding.</li>
+          <li>Long context (200K–1M): context parallelism for prefill, and KV offload/compression for decode. Price long context higher.</li>
+          <li>Capacity spread across clouds and accelerator types. The global router balances them.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="pill a">Hypothetical</span> GPT Astra-class</h4>
+        <ul>
+          <li>Multi-trillion MoE that may exceed one rack, so <b>PP across racks + EP within rack</b>, with micro-batching to hide pipeline bubbles.</li>
+          <li>FP4 weights, aggressive KV compression, and possibly hybrid attention.</li>
+          <li><b>Power-bound</b>: tens of MW per region, so siting decisions follow power availability.</li>
+          <li>Launch with <b>admission gating</b> (waitlists, tier-based access, lower rate limits) until capacity ramps.</li>
+          <li>Weight distribution becomes a first-class system (multi-TB per replica × hundreds of replicas).</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Fleet-level levers (all tiers)</h4>
+        <ul>
+          <li><b>Diurnal sharing</b>: shift accelerators between interactive and batch/research by time of day.</li>
+          <li><b>Model cascades</b>: product-side routing of easy tasks to smaller models (never silently. Model choice is the customer's).</li>
+          <li><b>Multi-region</b>: follow-the-sun capacity. Data-residency pins some tenants.</li>
+          <li><b>Hardware heterogeneity</b>: use each generation where it is most cost-effective (older GPUs for small models or prefill).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="reliability">
+    <h2><span class="num">11.</span>Reliability &amp; failure modes</h2>
+    <div class="tbl-wrap"><table>
+      <tr><th>Failure</th><th>Impact</th><th>Mitigation</th></tr>
+      <tr><td>Accelerator / node fails mid-generation</td><td>Whole replica (up to 72 GPUs) drops its in-flight streams</td><td>Health checks (ECC/XID), drain and replace. For in-flight streams, either return an error event so the client retries, or transparently re-prefill (prompt + generated so far) on another replica. Prefix cache makes this cheap.</td></tr>
+      <tr><td>Overload / traffic spike</td><td>TTFT explodes, queues grow</td><td>Admission control: shed batch first, then free tier, then 529 with retry-after. Never exceed KV capacity. Spill to other regions.</td></tr>
+      <tr><td>Region outage</td><td>Capacity loss</td><td>Global router fails over. Keep headroom (N+1 regions). Data-residency tenants get a documented degraded mode.</td></tr>
+      <tr><td>Bad model / config rollout</td><td>Quality regression, silent errors</td><td>Eval gates, shadow traffic, canary by % and tenant, automated quality and latency checks, instant rollback (keep old version warm).</td></tr>
+      <tr><td>Hot expert / skew</td><td>One GPU becomes the straggler, so every step slows</td><td>Redundant experts, dynamic placement, capacity factors.</td></tr>
+      <tr><td>Rate limiter (Redis) down</td><td>Can't enforce quotas</td><td>Fail open with local conservative limits. Fail closed only for spend caps.</td></tr>
+      <tr><td>Metering pipeline lag</td><td>Billing delay or double-count</td><td>Durable Kafka, idempotent aggregation on request_id, reconciliation jobs.</td></tr>
+      <tr><td>Client disconnects mid-stream</td><td>Wasted compute</td><td>Detect closed connection, cancel the sequence, and free KV immediately. Bill tokens actually generated.</td></tr>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="tradeoffs">
+    <h2><span class="num">12.</span>Key trade-offs to articulate</h2>
+    <div class="grid g2">
+      <div class="card"><h4>Batch size: throughput vs latency</h4><p>Bigger batch lowers $/token but raises TPOT. Choose the largest batch that meets the TPOT SLO. Offer different SLO tiers, such as a "fast mode" at a higher price that runs smaller batches or more GPUs per replica.</p></div>
+      <div class="card"><h4>More GPUs per replica</h4><p>More aggregate bandwidth gives lower TPOT and more KV room, but adds communication overhead and a larger blast radius. There is a sweet spot per model.</p></div>
+      <div class="card"><h4>Quantization</h4><p>About 2× efficiency per halving of precision, at the risk of quality loss. It must be validated on evals per model.</p></div>
+      <div class="card"><h4>Cache affinity vs load balance</h4><p>Sticky routing raises hit rate but creates hotspots. Bounded-load consistent hashing gives you both.</p></div>
+      <div class="card"><h4>Colocated vs disaggregated P/D</h4><p>Disaggregation gives SLO isolation and independent scaling, at the cost of KV-transfer bandwidth and complexity.</p></div>
+      <div class="card"><h4>Fail-open vs fail-closed</h4><p>Availability vs quota enforcement. Choose per control (rate limits fail open, spend caps fail closed).</p></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="qa">
+    <h2><span class="num">13.</span>Common follow-up questions (with crisp answers)</h2>
+    <details><summary>Why is decode memory-bound, and why does batching help?</summary>
+      <p>Each decode step reads all active weights from HBM to produce one token per sequence. Arithmetic intensity is about 2 FLOPs per byte per sequence, far below the
+        roughly 300+ FLOPs/byte needed to saturate modern accelerators. Batching B sequences reuses the same weight read for B tokens, so intensity scales with B until
+        KV reads or compute dominate.</p></details>
+    <details><summary>How do you choose batch size?</summary>
+      <p>Take the largest B such that (a) the KV for all B sequences fits in free HBM and (b) step time stays under the TPOT SLO. Make it dynamic: the engine admits work
+        under a token budget, and the scheduler preempts when KV is exhausted.</p></details>
+    <details><summary>A user sends a 1M-token prompt. What happens?</summary>
+      <p>Check quota (it counts against ITPM). Route to a long-context pool. Prefill with context parallelism and chunking so it doesn't stall others. KV is about 240 GB at
+        240 KB/token, which is a large slice of a replica, so long-context requests get their own pool and pricing. Prompt caching is critical for repeated long documents.</p></details>
+    <details><summary>How does prompt caching work end to end, and why is it cheaper?</summary>
+      <p>The client marks cache breakpoints. The engine hashes blocks of the prefix (scoped to the org) and stores KV in HBM, spilling to DRAM/SSD with a TTL. A later request
+        with the same prefix skips prefill for matched blocks, which saves compute (FLOPs ∝ tokens) and TTFT. Writes are priced higher because they consume memory. Reads are
+        cheaper because they skip compute. The router must be cache-aware for hits to happen.</p></details>
+    <details><summary>A GPU dies while 300 users are streaming. What happens?</summary>
+      <p>The replica is marked unhealthy and its streams terminate. The gateway either sends an error event (clients retry with the conversation so far) or transparently
+        re-submits prompt + generated tokens to a healthy replica. Re-prefill is fast thanks to prefix cache or because prefill is cheap relative to decode. The replica is drained and rebuilt from a warm spare.</p></details>
+    <details><summary>How would you cut cost per token by 2×?</summary>
+      <p>(1) FP8 to FP4 weights/KV where quality holds. (2) Raise prefix-cache hit rate via cache-aware routing. (3) Speculative decoding or MTP. (4) Larger batches via KV compression or offload.
+        (5) Fill troughs with batch traffic to raise utilization. (6) P/D disaggregation to right-size each phase. (7) Better kernels and comm overlap (MBU 60% to 80%).</p></details>
+    <details><summary>How do you roll out a new model (e.g. Opus 4.4 to 5.5)?</summary>
+      <p>Pre-stage weights across regions. Compile per hardware target. Load-test to find batch/TPOT curves. Shadow traffic, then internal dogfood, then gradual % rollout behind a new model
+        id (customers opt in by name, and aliases move later). Reallocate capacity from the old tier progressively. Keep the old version serving for pinned customers until deprecation.</p></details>
+    <details><summary>429 vs 529: who is at fault?</summary>
+      <p>429 means the customer exceeded <i>their</i> rate limit. 529/503 means the provider is out of capacity. Both carry retry-after. Clients use exponential backoff with jitter.
+        Server-side, shed lowest-priority classes first.</p></details>
+    <details><summary>How do you keep rate limits consistent across regions?</summary>
+      <p>Give each region a share of the global budget (periodically rebalanced by observed demand) and enforce it locally in Redis. Exact global consistency isn't worth cross-region latency on every request. A small over-admit is acceptable for rate limits, but not for hard spend caps, which are reconciled more strictly.</p></details>
+    <details><summary>Why MoE, and what does it change for serving?</summary>
+      <p>MoE gives the quality of a huge model at the per-token compute of a much smaller one. But <b>all</b> experts must stay in memory, the all-to-all communication needs a
+        high-bandwidth domain, and expert load imbalance creates stragglers. At large batch nearly every expert is touched each step, so decode reads close to the full weights.</p></details>
+    <details><summary>Is output deterministic at temperature 0?</summary>
+      <p>Not guaranteed. Batch composition changes reduction order in floating-point kernels, and MoE routing ties can flip. Determinism requires batch-invariant kernels, which cost some throughput.</p></details>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="cheatsheet">
+    <h2><span class="num">14.</span>Cheat sheet: numbers &amp; phrases</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h4>Numbers (approximate)</h4>
+        <div class="tbl-wrap"><table id="hwTable"></table></div>
+        <ul>
+          <li>NVLink (H100) ~900 GB/s, (Blackwell) ~1.8 TB/s per GPU. InfiniBand/Ethernet NIC 400–800 Gb/s (50–100 GB/s).</li>
+          <li>PCIe Gen5 x16 ≈ 64 GB/s. 1 day ≈ 86,400 s ≈ 10<sup>5</sup> s.</li>
+          <li>FLOPs/token ≈ 2 × active params. Prefill ~ compute-bound. Decode ~ bandwidth-bound.</li>
+          <li>Read 1 TB at 100 TB/s = 10 ms, so that is your TPOT floor.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Phrases that signal depth</h4>
+        <ul>
+          <li>"Goodput under TTFT and TPOT SLOs, not raw throughput."</li>
+          <li>"KV cache is the scarce resource. Paged allocation + prefix reuse."</li>
+          <li>"Continuous batching at iteration granularity with chunked prefill."</li>
+          <li>"Disaggregate prefill and decode. Size the P:D ratio from the input:output token mix."</li>
+          <li>"Expert parallelism inside the NVLink/ICI domain. Pipeline across domains only if needed."</li>
+          <li>"Cache-aware routing with bounded-load consistent hashing."</li>
+          <li>"Token-denominated rate limits: reserve max_tokens, refund on completion."</li>
+          <li>"Capacity is fixed and expensive. Autoscaling reallocates between tiers and batch rather than buying instantly."</li>
+          <li>"429 is the client's limit. 529 is our capacity. Shed by priority."</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Built as a study aid for system design interviews. All model sizes are assumptions. Hardware figures are approximate public specs. Not affiliated with Anthropic, OpenAI, Google, NVIDIA or AWS.
+  </footer>
+  </main>
+</div>
+
+<div id="modal" role="dialog" aria-modal="true" aria-label="Enlarged diagram">
+  <div class="bar">
+    <span class="hint">Scroll to zoom &middot; drag to pan &middot; double-click to reset &middot; Esc to close</span>
+    <button class="btn" id="zoomIn" type="button" aria-label="Zoom in">+</button>
+    <button class="btn" id="zoomOut" type="button" aria-label="Zoom out">&minus;</button>
+    <button class="btn" id="zoomReset" type="button">Reset</button>
+    <button class="btn" id="modalClose" type="button">Close</button>
+  </div>
+  <div id="modalViewport"><div id="modalStage"></div></div>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+  const blocks = [...document.querySelectorAll(".mermaid")];
+  blocks.forEach((b) => {
+    b.dataset.src = b.innerHTML;
+    const wrap = document.createElement("div");
+    wrap.className = "diagram";
+    b.parentNode.insertBefore(wrap, b);
+    wrap.appendChild(b);
+    const tools = document.createElement("div");
+    tools.className = "diagram-tools";
+    tools.innerHTML = '<span class="hint">Click to enlarge</span>';
+    wrap.appendChild(tools);
+  });
+
+  async function renderDiagrams() {
+    const light = document.documentElement.dataset.theme === "light";
+    mermaid.initialize({
+      startOnLoad: false, securityLevel: "strict",
+      theme: light ? "default" : "dark",
+      flowchart: { useMaxWidth: true, nodeSpacing: 40, rankSpacing: 55, padding: 12 },
+      sequence: { useMaxWidth: true },
+      themeVariables: light
+        ? { fontSize: "16px" }
+        : { primaryColor: "#1c2330", primaryBorderColor: "#d97757", lineColor: "#9da7b3", fontSize: "16px" },
+    });
+    blocks.forEach((b) => { b.removeAttribute("data-processed"); b.innerHTML = b.dataset.src; });
+    await mermaid.run({ nodes: blocks });
+  }
+  window.renderDiagrams = renderDiagrams;
+  renderDiagrams();
+</script>
+
+<script>
+// ---------- Hardware (approx public dense specs; prices & power illustrative) ----------
+const HW = {
+  h100:  { name: "NVIDIA H100 SXM",          mem: 80,  bw: 3.35, tf8: 1979, fp4: false, price: 2.5, kw: 0.9 },
+  h200:  { name: "NVIDIA H200",              mem: 141, bw: 4.8,  tf8: 1979, fp4: false, price: 3.5, kw: 0.9 },
+  b200:  { name: "NVIDIA B200",              mem: 192, bw: 8.0,  tf8: 4500, fp4: true,  price: 5.0, kw: 1.3 },
+  gb300: { name: "NVIDIA GB300 (NVL72)",     mem: 288, bw: 8.0,  tf8: 5000, fp4: true,  price: 7.0, kw: 1.8 },
+  tpu7:  { name: "Google TPU v7 (Ironwood)", mem: 192, bw: 7.4,  tf8: 4600, fp4: false, price: 5.0, kw: 1.3 },
+  trn2:  { name: "AWS Trainium2",            mem: 96,  bw: 2.9,  tf8: 1300, fp4: false, price: 2.0, kw: 0.7 },
+};
+
+// ---------- Tier presets (ILLUSTRATIVE ASSUMPTIONS, not disclosed figures) ----------
+const TIERS = {
+  haiku:  { label: "Haiku-class (small)",                   total: 60,   active: 8,   layers: 48,  kvh: 8,  hd: 128, wp: 1,   hw: "h200",  n: 2,  comm: 0.5, slo: 25 },
+  sonnet: { label: "Sonnet-class",                          total: 400,  active: 40,  layers: 64,  kvh: 8,  hd: 128, wp: 1,   hw: "b200",  n: 4,  comm: 1.0, slo: 30 },
+  opus44: { label: "Opus 4.4-class",                        total: 1500, active: 120, layers: 96,  kvh: 8,  hd: 128, wp: 1,   hw: "b200",  n: 16, comm: 2.5, slo: 40 },
+  opus55: { label: "Opus 5.5-class",                        total: 3000, active: 200, layers: 120, kvh: 8,  hd: 128, wp: 1,   hw: "gb300", n: 36, comm: 3.5, slo: 45 },
+  astra:  { label: "GPT Astra-class (hypothetical frontier)", total: 8000, active: 400, layers: 144, kvh: 16, hd: 128, wp: 0.5, hw: "gb300", n: 72, comm: 5.0, slo: 60 },
+};
+
+const $ = (id) => document.getElementById(id);
+const num = (id) => parseFloat($(id).value);
+
+function fmt(x, d = 1) {
+  if (!isFinite(x)) return "—";
+  const a = Math.abs(x);
+  if (a >= 1e12) return (x / 1e12).toFixed(d) + "T";
+  if (a >= 1e9)  return (x / 1e9).toFixed(d) + "B";
+  if (a >= 1e6)  return (x / 1e6).toFixed(d) + "M";
+  if (a >= 1e4)  return (x / 1e3).toFixed(d) + "K";
+  if (a >= 100)  return x.toFixed(0);
+  return x.toFixed(d);
+}
+function fmtBytes(b) {
+  if (b >= 1e12) return (b / 1e12).toFixed(2) + " TB";
+  if (b >= 1e9)  return (b / 1e9).toFixed(1) + " GB";
+  if (b >= 1e6)  return (b / 1e6).toFixed(1) + " MB";
+  return (b / 1e3).toFixed(0) + " KB";
+}
+function flopsPerAcc(hw, wp) {
+  let f = hw.tf8 * 1e12;
+  if (wp === 2) f *= 0.5;
+  else if (wp === 0.5 && hw.fp4) f *= 2;
+  return f;
+}
+
+// ---------- Populate selects & static tables ----------
+for (const [k, t] of Object.entries(TIERS)) $("preset").add(new Option(t.label, k));
+for (const [k, h] of Object.entries(HW)) $("hw").add(new Option(h.name, k));
+$("preset").value = "opus55";
+
+function renderTierTable() {
+  const head = `<tr><th>Tier (assumed)</th><th>Total / active params</th><th>Weights FP8</th><th>Weights FP4</th>
+    <th>KV / token (FP8)</th><th>KV @ 32K ctx</th><th>Min H100 (FP8)</th><th>Min B200 (FP8)</th><th>Min GB300 (FP4)</th><th>Decode FLOPs / token</th></tr>`;
+  const rows = Object.values(TIERS).map(t => {
+    const w8 = t.total * 1e9, w4 = w8 / 2;
+    const kv = 2 * t.layers * t.kvh * t.hd * 1;
+    const minA = (bytes, hw) => Math.ceil(bytes / (HW[hw].mem * 1e9 * 0.6));
+    return `<tr><td><b>${t.label}</b></td><td>${fmt(t.total * 1e9, 1)} / ${fmt(t.active * 1e9, 0)}</td>
+      <td>${fmtBytes(w8)}</td><td>${fmtBytes(w4)}</td><td>${fmtBytes(kv)}</td><td>${fmtBytes(kv * 32768)}</td>
+      <td>${minA(w8, "h100")}</td><td>${minA(w8, "b200")}</td><td>${minA(w4, "gb300")}</td><td>${fmt(2 * t.active * 1e9, 0)}</td></tr>`;
+  }).join("");
+  $("tierTable").innerHTML = head + rows;
+
+  $("hwTable").innerHTML = `<tr><th>Accelerator</th><th>HBM</th><th>BW</th><th>FP8 dense</th></tr>` +
+    Object.values(HW).map(h => `<tr><td>${h.name}</td><td>${h.mem} GB</td><td>${h.bw} TB/s</td><td>~${(h.tf8 / 1000).toFixed(1)} PF</td></tr>`).join("");
+}
+
+function applyPreset() {
+  const t = TIERS[$("preset").value];
+  $("total").value = t.total; $("active").value = t.active; $("layers").value = t.layers;
+  $("kvh").value = t.kvh; $("hd").value = t.hd; $("wp").value = String(t.wp); $("kvp").value = "1";
+  $("hw").value = t.hw; $("n").value = t.n; $("comm").value = t.comm; $("slo").value = t.slo;
+  applyHw();
+}
+function applyHw() {
+  const h = HW[$("hw").value];
+  $("price").value = h.price; $("kw").value = h.kw;
+}
+
+// ---------- Core model ----------
+function stepTime(B, p) {
+  const r = p.active / p.total;
+  const touched = Math.min(1, r + (1 - r) * (1 - Math.pow(1 - r, B))); // rough MoE expert coverage
+  const wBytes = p.weightsBytes * touched;
+  const kvRead = B * p.kvTok * p.ctxAvg;
+  const mem = (wBytes + kvRead) / (p.n * p.hw.bw * 1e12 * p.bwEff);
+  const comp = (2 * p.active * 1e9 * B) / (p.n * p.flops * 0.5);
+  const t = Math.max(mem, comp) + p.comm / 1000;
+  return { t: t / p.spec, memBound: mem >= comp, mem, comp };
+}
+
+function compute() {
+  const hw = HW[$("hw").value];
+  const p = {
+    total: num("total"), active: num("active"), layers: num("layers"), kvh: num("kvh"), hd: num("hd"),
+    wp: parseFloat($("wp").value), kvp: parseFloat($("kvp").value), hw, n: num("n"),
+    memUtil: num("memUtil"), bwEff: num("bwEff"), mfuP: num("mfuP"), comm: num("comm"),
+    price: num("price"), kw: num("kw"), dau: num("dau"), rpu: num("rpu"), inTok: num("inTok"), outTok: num("outTok"),
+    peak: num("peak"), cache: Math.min(Math.max(num("cache"), 0), 0.99), slo: num("slo"), spec: Math.max(num("spec"), 0.1),
+  };
+  p.flops = flopsPerAcc(hw, p.wp);
+  p.weightsBytes = p.total * 1e9 * p.wp;
+  p.kvTok = 2 * p.layers * p.kvh * p.hd * p.kvp;
+  p.ctxAvg = p.inTok + p.outTok / 2;
+
+  const hbm = p.n * hw.mem * 1e9 * p.memUtil;
+  const kvBudget = hbm - p.weightsBytes;
+  const kvPerSeq = p.kvTok * (p.inTok + p.outTok);
+  const maxConc = kvBudget > 0 ? Math.floor(kvBudget / kvPerSeq) : 0;
+  const warnings = [];
+
+  let B = 0;
+  const cap = Math.min(maxConc, 8192);
+  if (maxConc <= 0) {
+    warnings.push(`Weights (${fmtBytes(p.weightsBytes)}) don't fit in usable HBM (${fmtBytes(hbm)}). Increase accelerators per replica to at least ${Math.ceil(p.weightsBytes / (hw.mem * 1e9 * p.memUtil * 0.6))}, or lower precision.`);
+  } else if ($("auto").checked) {
+    B = 1;
+    for (let b = 1; b <= cap; b++) { if (stepTime(b, p).t * 1000 <= p.slo) B = b; else break; }
+    if (stepTime(1, p).t * 1000 > p.slo) warnings.push(`Even batch=1 misses the ${p.slo} ms TPOT SLO. Add accelerators per replica (more aggregate bandwidth), quantize, or use speculative decoding.`);
+  } else {
+    B = Math.min(num("batch"), cap);
+    if (num("batch") > cap) warnings.push(`Manual batch capped at ${cap} by KV-cache capacity.`);
+  }
+
+  const res = [];
+  const group = (t) => res.push(`<div class="group-title">${t}</div>`);
+  const kpi = (k, v, s = "", hl = false) => res.push(`<div class="kpi${hl ? " hl" : ""}"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`);
+
+  group("Memory per replica");
+  kpi("Weights", fmtBytes(p.weightsBytes), `${p.total}B params × ${p.wp} B`);
+  kpi("Usable HBM", fmtBytes(hbm), `${p.n} × ${hw.mem} GB × ${p.memUtil}`);
+  kpi("KV budget", kvBudget > 0 ? fmtBytes(kvBudget) : "none", "HBM − weights");
+  kpi("KV per token", fmtBytes(p.kvTok), `2×${p.layers}×${p.kvh}×${p.hd}×${p.kvp}B`);
+  kpi("KV per sequence", fmtBytes(kvPerSeq), `${p.inTok + p.outTok} tokens`);
+  kpi("Max concurrent seqs", fmt(maxConc, 0), "KV-bound ceiling", true);
+
+  if (B > 0) {
+    const st = stepTime(B, p);
+    const tpot = st.t * 1000;
+    const perUser = 1000 / tpot;
+    const replicaTps = B / st.t;
+    const ttftPrefill = (2 * p.active * 1e9 * p.inTok * (1 - p.cache)) / (p.n * p.flops * p.mfuP);
+
+    group("Decode performance");
+    kpi("Batch size", fmt(B, 0), $("auto").checked ? "largest meeting TPOT SLO" : "manual", true);
+    kpi("TPOT", tpot.toFixed(1) + " ms", st.memBound ? "memory-bandwidth bound" : "compute bound", true);
+    kpi("Per-user speed", perUser.toFixed(0) + " tok/s", "1 / TPOT");
+    kpi("Replica throughput", fmt(replicaTps, 1) + " tok/s", "batch / TPOT", true);
+    kpi("Prefill time (uncached)", (ttftPrefill * 1000).toFixed(0) + " ms", "TTFT floor, excluding queueing");
+    kpi("Per-accel decode", fmt(replicaTps / p.n, 1) + " tok/s", "per accelerator");
+
+    const reqDay = p.dau * 1e6 * p.rpu;
+    const avgQps = reqDay / 86400, peakQps = avgQps * p.peak;
+    const peakOut = peakQps * p.outTok;
+    const peakIn = peakQps * p.inTok * (1 - p.cache);
+    const decodeReplicas = Math.ceil(peakOut / replicaTps);
+    const prefillPerAcc = (p.flops * p.mfuP) / (2 * p.active * 1e9);
+    const prefillAccs = Math.ceil(peakIn / prefillPerAcc);
+    const totalAcc = decodeReplicas * p.n + prefillAccs;
+    const e2e = ttftPrefill + p.outTok * st.t;
+    const concurrency = peakQps * e2e;
+
+    group("Traffic → fleet");
+    kpi("Requests / day", fmt(reqDay, 1));
+    kpi("Avg / peak QPS", `${fmt(avgQps, 1)} / ${fmt(peakQps, 1)}`);
+    kpi("Peak output tok/s", fmt(peakOut, 1));
+    kpi("Peak uncached input tok/s", fmt(peakIn, 1));
+    kpi("Concurrent streams (Little)", fmt(concurrency, 1), `QPS × E2E (${e2e.toFixed(1)} s)`);
+    kpi("Decode replicas", fmt(decodeReplicas, 0), `${fmt(decodeReplicas * p.n, 0)} accelerators`, true);
+    kpi("Prefill accelerators", fmt(prefillAccs, 0), `${fmt(prefillPerAcc, 1)} tok/s each`);
+    kpi("Total accelerators", fmt(totalAcc, 0), "provisioned for peak", true);
+
+    group("Cost & power");
+    const costHr = totalAcc * p.price;
+    kpi("Fleet cost / hour", "$" + fmt(costHr, 1), `$${p.price}/accel-hr`);
+    kpi("Fleet cost / year", "$" + fmt(costHr * 24 * 365, 1));
+    kpi("$ / 1M output tok", "$" + ((p.n * p.price) / (replicaTps * 3600) * 1e6).toFixed(2), "decode, at full utilization", true);
+    kpi("$ / 1M input tok", "$" + (p.price / (prefillPerAcc * 3600) * 1e6).toFixed(3), "uncached prefill");
+    kpi("Power (PUE 1.3)", (totalAcc * p.kw * 1.3 / 1000).toFixed(1) + " MW", `${p.kw} kW/accel all-in`);
+
+    if (concurrency > decodeReplicas * B * 1.05) warnings.push(`Little's law: ~${fmt(concurrency, 0)} concurrent streams exceed decode slots (${fmt(decodeReplicas * B, 0)}). Add headroom or capacity.`);
+    if (ttftPrefill > 2) warnings.push(`Prefill alone takes ${ttftPrefill.toFixed(1)} s. Consider more accelerators, context parallelism, or a higher cache-hit rate.`);
+    if (!st.memBound) warnings.push("Decode is compute-bound at this batch, so adding batch won't help much. This is typical only for very large batches or small models.");
+    if (B === maxConc && $("auto").checked) warnings.push("Batch is limited by KV-cache capacity, not latency. Reduce KV (FP8 KV, GQA/MLA, offload) or add HBM to increase throughput.");
+    if (warnings.length === 0) warnings.push({ ok: true, text: "Configuration fits memory and meets the TPOT SLO." });
+
+    drawChart(p, cap, B);
+  } else {
+    drawChart(p, 0, 0);
+  }
+
+  $("results").innerHTML = res.join("");
+  $("warnings").innerHTML = warnings.map(w => typeof w === "string" ? `<li>${w}</li>` : `<li class="ok">${w.text}</li>`).join("");
+}
+
+// ---------- Chart ----------
+const cssVar = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+function drawChart(p, cap, chosen) {
+  const c = $("chart"), ctx = c.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const W = c.clientWidth || 900, H = W < 500 ? 260 : 320;
+  const small = W < 500;
+  c.style.height = H + "px";
+  c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const L = small ? 46 : 60, R = small ? 48 : 60, T = 20, Bm = 40;
+  const col = { border: cssVar("--border"), muted: cssVar("--muted"), tpot: cssVar("--accent2"), tps: cssVar("--accent"), good: cssVar("--good") };
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = (small ? "11px" : "12px") + " -apple-system, sans-serif";
+  if (cap < 1) { ctx.fillStyle = col.muted; ctx.fillText("Model does not fit. Increase accelerators per replica.", L, H / 2); return; }
+
+  const pts = [];
+  for (let b = 1; b <= cap; b = Math.max(b + 1, Math.round(b * 1.25))) {
+    const s = stepTime(b, p); pts.push({ b, tpot: s.t * 1000, tps: b / s.t });
+  }
+  const s = stepTime(cap, p); pts.push({ b: cap, tpot: s.t * 1000, tps: cap / s.t });
+
+  const maxB = Math.log2(cap) || 1;
+  const maxT = Math.max(...pts.map(q => q.tpot), p.slo) * 1.1;
+  const maxS = Math.max(...pts.map(q => q.tps)) * 1.1;
+  const x = (b) => L + (Math.log2(b) / maxB) * (W - L - R);
+  const yT = (v) => H - Bm - (v / maxT) * (H - T - Bm);
+  const yS = (v) => H - Bm - (v / maxS) * (H - T - Bm);
+
+  ctx.strokeStyle = col.border; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(L, T); ctx.lineTo(L, H - Bm); ctx.lineTo(W - R, H - Bm); ctx.lineTo(W - R, T); ctx.stroke();
+
+  ctx.fillStyle = col.muted;
+  for (let e = 0; e <= Math.floor(maxB); e++) {
+    const b = 2 ** e; if (b > cap) break;
+    ctx.fillText(String(b), x(b) - 8, H - Bm + 16);
+  }
+  ctx.fillText("batch size (log scale)", W / 2 - 50, H - 6);
+  for (let i = 0; i <= 4; i++) {
+    ctx.fillStyle = col.tpot; ctx.fillText((maxT * i / 4).toFixed(0) + "ms", 8, yT(maxT * i / 4) + 4);
+    ctx.fillStyle = col.tps; ctx.fillText(fmt(maxS * i / 4, 0), W - R + 6, yS(maxS * i / 4) + 4);
+  }
+
+  const line = (key, y, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    pts.forEach((q, i) => i ? ctx.lineTo(x(q.b), y(q[key])) : ctx.moveTo(x(q.b), y(q[key])));
+    ctx.stroke();
+  };
+  line("tps", yS, col.tps);
+  line("tpot", yT, col.tpot);
+
+  ctx.setLineDash([6, 4]); ctx.strokeStyle = col.tpot; ctx.globalAlpha = 0.5; ctx.beginPath();
+  ctx.moveTo(L, yT(p.slo)); ctx.lineTo(W - R, yT(p.slo)); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+
+  if (chosen > 0) {
+    ctx.strokeStyle = col.good; ctx.setLineDash([3, 3]); ctx.beginPath();
+    ctx.moveTo(x(chosen), T); ctx.lineTo(x(chosen), H - Bm); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = col.good; ctx.fillText("chosen batch " + chosen, Math.min(x(chosen) + 4, W - R - 110), T + 12);
+  }
+}
+
+// ---------- Wiring ----------
+$("preset").addEventListener("change", () => { applyPreset(); compute(); });
+$("hw").addEventListener("change", () => { applyHw(); compute(); });
+document.querySelectorAll(".form input, .form select").forEach(el => {
+  if (el.id !== "preset" && el.id !== "hw") el.addEventListener("input", compute);
+});
+renderTierTable();
+applyPreset();
+compute();
+
+// ---------- Active nav highlighting ----------
+const links = [...document.querySelectorAll("nav a")];
+const obs = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      links.forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + e.target.id));
+    }
+  });
+}, { rootMargin: "-40% 0px -55% 0px" });
+document.querySelectorAll("section").forEach(s => obs.observe(s));
+
+// ---------- Diagram modal (double-click to enlarge, wheel zoom, drag pan) ----------
+const modal = $("modal"), viewport = $("modalViewport"), stage = $("modalStage");
+let current = null, zoom = 1, panX = 0, panY = 0, drag = null;
+const applyTransform = () => { stage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; };
+const resetView = () => { zoom = 1; panX = 0; panY = 0; applyTransform(); };
+function zoomAt(mx, my, factor) {
+  const nz = Math.min(10, Math.max(0.3, zoom * factor));
+  panX = mx - (mx - panX) * (nz / zoom);
+  panY = my - (my - panY) * (nz / zoom);
+  zoom = nz; applyTransform();
+}
+window.openDiagram = (block) => {
+  const svg = block.querySelector("svg");
+  if (!svg) return;
+  current = { block, svg, w: svg.getAttribute("width"), h: svg.getAttribute("height"), style: svg.getAttribute("style") };
+  svg.removeAttribute("style");
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", "100%");
+  stage.appendChild(svg);
+  modal.classList.add("open");
+  document.body.style.overflow = "hidden";
+  resetView();
+};
+function closeDiagram() {
+  if (!current) return;
+  const { block, svg, w, h, style } = current;
+  const restore = (attr, val) => val === null ? svg.removeAttribute(attr) : svg.setAttribute(attr, val);
+  restore("width", w); restore("height", h); restore("style", style);
+  block.appendChild(svg);
+  current = null;
+  modal.classList.remove("open");
+  document.body.style.overflow = "";
+}
+document.addEventListener("click", (e) => {
+  const block = e.target.closest(".mermaid");
+  if (block) window.openDiagram(block);
+});
+viewport.addEventListener("dblclick", resetView);
+viewport.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const r = viewport.getBoundingClientRect();
+  zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015));
+}, { passive: false });
+// pointer events: one pointer pans, two pointers pinch-zoom (touch)
+const pointers = new Map();
+let pinch = null;
+const twoPoints = () => {
+  const [a, b] = [...pointers.values()];
+  return { dist: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+};
+viewport.addEventListener("pointerdown", (e) => {
+  viewport.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) { pinch = twoPoints(); drag = null; }
+  else if (pointers.size === 1) { drag = { x: e.clientX - panX, y: e.clientY - panY }; viewport.classList.add("dragging"); }
+});
+viewport.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && pointers.size === 2) {
+    const now = twoPoints();
+    const r = viewport.getBoundingClientRect();
+    panX += now.mx - pinch.mx; panY += now.my - pinch.my;
+    if (pinch.dist > 0) zoomAt(now.mx - r.left, now.my - r.top, now.dist / pinch.dist);
+    else applyTransform();
+    pinch = now;
+  } else if (drag) {
+    panX = e.clientX - drag.x; panY = e.clientY - drag.y; applyTransform();
+  }
+});
+const endPointer = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 1) {
+    const p = [...pointers.values()][0];
+    drag = { x: p.x - panX, y: p.y - panY };
+  } else if (pointers.size === 0) {
+    drag = null; viewport.classList.remove("dragging");
+  }
+};
+viewport.addEventListener("pointerup", endPointer);
+viewport.addEventListener("pointercancel", endPointer);
+const zoomCenter = (f) => { const r = viewport.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, f); };
+$("zoomIn").addEventListener("click", () => zoomCenter(1.25));
+$("zoomOut").addEventListener("click", () => zoomCenter(0.8));
+$("zoomReset").addEventListener("click", resetView);
+$("modalClose").addEventListener("click", closeDiagram);
+modal.addEventListener("click", (e) => { if (e.target === modal) closeDiagram(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDiagram(); });
+
+// ---------- Theme toggle ----------
+function updateThemeButton() {
+  const light = document.documentElement.dataset.theme === "light";
+  $("themeToggle").textContent = light ? "Switch to dark mode" : "Switch to light mode";
+}
+$("themeToggle").addEventListener("click", () => {
+  closeDiagram();
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem("theme", next);
+  updateThemeButton();
+  compute();
+  if (window.renderDiagrams) window.renderDiagrams();
+});
+updateThemeButton();
+
+// ---------- Mobile menu ----------
+const navEl = $("toc"), menuBtn = $("menuToggle");
+function setMenu(open) {
+  navEl.classList.toggle("open", open);
+  menuBtn.setAttribute("aria-expanded", String(open));
+  menuBtn.textContent = open ? "Close" : "Menu";
+}
+menuBtn.addEventListener("click", () => setMenu(!navEl.classList.contains("open")));
+navEl.querySelectorAll("ol a").forEach(a => a.addEventListener("click", () => setMenu(false)));
+
+// ---------- Redraw chart when its width changes (rotation / resize) ----------
+let lastChartWidth = $("chart").clientWidth, resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const w = $("chart").clientWidth;
+    if (w !== lastChartWidth) { lastChartWidth = w; compute(); }
+  }, 150);
+});
+</script>
+</body>
+</html>
